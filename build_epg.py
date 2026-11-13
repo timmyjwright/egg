@@ -3,7 +3,8 @@
 
 Downloads gzipped XMLTV sources from epgshare01.online, keeps only the
 channels that are actually watched (see the filter lists below), merges
-them into one valid XMLTV document and writes custom_epg.xml.gz.
+them into two valid XMLTV documents: custom_epg_uk.xml.gz and
+custom_epg_us.xml.gz (add each as its own EPG source in TiviMate).
 
 The previous version kept 2,068 channels / ~300,000 programmes (~14 MB
 gzipped), which TiviMate on the Fire TV Cube would not import fully.
@@ -30,7 +31,6 @@ HEADERS = {
     )
 }
 
-OUTPUT_FILE = "custom_epg.xml.gz"
 
 # ---------------------------------------------------------------------------
 # Channel filters
@@ -110,13 +110,17 @@ LOCALS_KEEP = {
 # files from the original spec are no longer fetched: they were not in the
 # requested channel list. To re-add one, append its filename here with
 # None as the drop rules, e.g. ("epg_ripper_BEIN1.xml.gz", None).
-SOURCES = [
-    ("epg_ripper_UK1.xml.gz", UK1_DROP, None),
-    ("epg_ripper_US2.xml.gz", US2_DROP, None),
-    ("epg_ripper_US_SPORTS1.xml.gz", {"minor league baseball": US_SPORTS1_DROP}, None),
-    ("epg_ripper_PEACOCK1.xml.gz", None, None),
-    ("epg_ripper_US_LOCALS1.xml.gz", None, LOCALS_KEEP),
-]
+GUIDES = {
+    "custom_epg_uk.xml.gz": [
+        ("epg_ripper_UK1.xml.gz", UK1_DROP, None),
+    ],
+    "custom_epg_us.xml.gz": [
+        ("epg_ripper_US2.xml.gz", US2_DROP, None),
+        ("epg_ripper_US_SPORTS1.xml.gz", {"minor league baseball": US_SPORTS1_DROP}, None),
+        ("epg_ripper_PEACOCK1.xml.gz", None, None),
+        ("epg_ripper_US_LOCALS1.xml.gz", None, LOCALS_KEEP),
+    ],
+}
 
 
 def normalise(text):
@@ -231,18 +235,21 @@ def process_source(data, drop_rules, keep_set, out_file, kept_channel_ids):
     return stats
 
 
-def main():
+def build_guide(output_file, sources, cache):
+    """Build one guide file from its sources. Returns (ok_count, totals)."""
     sources_ok = 0
     totals = {"channels": 0, "programmes": 0, "dupe_channels": 0}
     kept_channel_ids = set()
 
-    with gzip.open(OUTPUT_FILE, "wb") as out:
+    with gzip.open(output_file, "wb") as out:
         out.write(b'<?xml version="1.0" encoding="UTF-8"?>\n')
         out.write(b'<!DOCTYPE tv SYSTEM "xmltv.dtd">\n')
         out.write(b'<tv generator-info-name="build_epg.py">\n')
 
-        for filename, drop_rules, keep_set in SOURCES:
-            data = download(BASE_URL + filename)
+        for filename, drop_rules, keep_set in sources:
+            if filename not in cache:
+                cache[filename] = download(BASE_URL + filename)
+            data = cache[filename]
             if data is None:
                 continue
             sources_ok += 1
@@ -253,15 +260,21 @@ def main():
         out.write(b"</tv>\n")
 
     print(
-        f"Done: {sources_ok}/{len(SOURCES)} sources used, "
-        f"{totals['channels']} channels, "
-        f"{totals['programmes']} programmes "
-        f"({totals['dupe_channels']} duplicate channel ids skipped) "
-        f"-> {OUTPUT_FILE}"
+        f"Done {output_file}: {sources_ok}/{len(sources)} sources used, "
+        f"{totals['channels']} channels, {totals['programmes']} programmes"
     )
+    return sources_ok, totals
 
-    if sources_ok == 0:
-        print("ERROR: every source failed; no guide built.", file=sys.stderr)
+
+def main():
+    cache = {}
+    failed = False
+    for output_file, sources in GUIDES.items():
+        ok, _ = build_guide(output_file, sources, cache)
+        if ok == 0:
+            print(f"ERROR: every source failed for {output_file}.", file=sys.stderr)
+            failed = True
+    if failed:
         sys.exit(1)
 
 
